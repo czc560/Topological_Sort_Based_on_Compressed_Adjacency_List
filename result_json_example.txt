@@ -1,0 +1,2 @@
+{"algorithm":"dfs","has_cycle":false,"time_ms":0,"h":[0,0,0,1,2,4,6],"list":[3,1,0,1,2,0],"topo":[5,4,2,3,1,0]}
+{"algorithm":"kahn","has_cycle":false,"time_ms":0,"h":[0,0,0,1,2,4,6],"list":[3,1,0,1,2,0],"topo":[4,5,2,0,3,1]}
