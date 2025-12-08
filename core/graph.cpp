@@ -1,28 +1,30 @@
-#include "graph_decl.hpp"
+#include "graph_clean.hpp"
+
 #include <algorithm>
 #include <functional>
 #include <deque>
 #include <sstream>
+#include <vector>
+#include <string>
+#include <utility>
 
-using namespace std;
-
-void build_compressed(const vector<vector<int>> &adj, vector<int> &h, vector<int> &list) {
-    int n = (int)adj.size();
+void build_compressed(const std::vector<std::vector<int>> &adj, std::vector<int> &h, std::vector<int> &list) {
+    int n = static_cast<int>(adj.size());
     h.assign(n + 1, 0);
-    for (int i = 0; i < n; ++i) h[i + 1] = h[i] + (int)adj[i].size();
+    for (int i = 0; i < n; ++i) h[i + 1] = h[i] + static_cast<int>(adj[i].size());
     list.clear();
     list.reserve(h[n]);
     for (int i = 0; i < n; ++i) for (int v : adj[i]) list.push_back(v);
 }
 
-pair<int,int> get_neighbors(int u, const vector<int> &h) {
+std::pair<int,int> get_neighbors(int u, const std::vector<int> &h) {
     return {h[u], h[u+1]};
 }
 
-bool topsort_dfs(int n, const vector<int> &h, const vector<int> &list, vector<int> &topo) {
-    vector<int> state(n, 0); // 0 unvisited,1 visiting,2 done
+bool topsort_dfs(int n, const std::vector<int> &h, const std::vector<int> &list, std::vector<int> &topo) {
+    std::vector<int> state(n, 0); // 0 unvisited,1 visiting,2 done
     topo.clear(); topo.reserve(n);
-    function<bool(int)> dfs = [&](int u)->bool{
+    std::function<bool(int)> dfs = [&](int u)->bool{
         state[u] = 1;
         for (int idx = h[u]; idx < h[u+1]; ++idx) {
             int v = list[idx];
@@ -34,15 +36,15 @@ bool topsort_dfs(int n, const vector<int> &h, const vector<int> &list, vector<in
         return false;
     };
     for (int i = 0; i < n; ++i) if (state[i] == 0) if (dfs(i)) return true;
-    reverse(topo.begin(), topo.end());
+    std::reverse(topo.begin(), topo.end());
     return false;
 }
 
-bool topsort_kahn(int n, const vector<int> &h, const vector<int> &list, vector<int> &topo) {
+bool topsort_kahn(int n, const std::vector<int> &h, const std::vector<int> &list, std::vector<int> &topo) {
     topo.clear(); topo.reserve(n);
-    vector<int> indeg(n, 0);
+    std::vector<int> indeg(n, 0);
     for (int u = 0; u < n; ++u) for (int idx = h[u]; idx < h[u+1]; ++idx) indeg[list[idx]]++;
-    deque<int> q;
+    std::deque<int> q;
     for (int i = 0; i < n; ++i) if (indeg[i] == 0) q.push_back(i);
     while (!q.empty()) {
         int u = q.front(); q.pop_front();
@@ -52,14 +54,14 @@ bool topsort_kahn(int n, const vector<int> &h, const vector<int> &list, vector<i
             if (--indeg[v] == 0) q.push_back(v);
         }
     }
-    return (int)topo.size() != n;
+    return static_cast<int>(topo.size()) != n;
 }
 
-string to_json_array(const vector<int> &a) {
-    string s = "[";
+std::string to_json_array(const std::vector<int> &a) {
+    std::string s = "[";
     for (size_t i = 0; i < a.size(); ++i) {
         if (i) s += ",";
-        s += to_string(a[i]);
+        s += std::to_string(a[i]);
     }
     s += "]";
     return s;
