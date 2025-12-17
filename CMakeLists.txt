@@ -7,6 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # sources
 set(SRCS
     topsort.cpp
+    core/compressed_graph.cpp
+    core/layout.cpp
+    core/demos.cpp
+    core/toposort.cpp
     core/graph.cpp
 )
 

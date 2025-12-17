@@ -1,107 +1,231 @@
-#include <iostream>
-#include <vector>
-#include <string>
-#include <sstream>
-#include <chrono>
 #include <algorithm>
+#include <chrono>
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <vector>
 
+#include "core/compressed_graph.hpp"
+#include "core/demos.hpp"
 #include "core/graph_clean.hpp"
+#include "core/layout.hpp"
+#include "core/toposort.hpp"
 
-int main(int argc, char** argv) {
+namespace {
+using clock_t = std::chrono::high_resolution_clock;
+
+std::vector<int> to_int_vector(const std::vector<uint32_t> &src) { return std::vector<int>(src.begin(), src.end()); }
+
+bool parse_graph_input(int n, int m, const std::vector<int> &rest, std::vector<std::vector<uint32_t>> &adj_out) {
+    adj_out.assign(n, {});
+    if (static_cast<int>(rest.size()) >= n + 1) {
+        int possible_list_size = rest[n];
+        if (possible_list_size >= 0 && possible_list_size == static_cast<int>(rest.size()) - (n + 1)) {
+            std::vector<int> h(rest.begin(), rest.begin() + n + 1);
+            std::vector<int> list(rest.begin() + n + 1, rest.end());
+            for (int u = 0; u < n; ++u) {
+                for (int idx = h[u]; idx < h[u + 1]; ++idx) adj_out[u].push_back(static_cast<uint32_t>(list[idx]));
+            }
+            return true;
+        }
+    }
+    if (static_cast<int>(rest.size()) == 2 * m) {
+        for (int i = 0; i < m; ++i) {
+            int u = rest[2 * i];
+            int v = rest[2 * i + 1];
+            if (u < 0 || u >= n || v < 0 || v >= n) return false;
+            adj_out[u].push_back(static_cast<uint32_t>(v));
+        }
+        return true;
+    }
+    return false;
+}
+
+void emit_result(const std::string &algo_name,
+                 TopoSortSolver &solver,
+                 CompressedGraph &graph,
+                 const std::string &format,
+                 bool with_layout) {
+    std::vector<uint32_t> offsets;
+    std::vector<uint32_t> neighbors;
+    graph.export_csr(offsets, neighbors);
+
+    std::vector<uint32_t> topo;
+    std::vector<LayoutPoint> layout_pts;
+    auto t0 = clock_t::now();
+    bool has_cycle = solver.run(topo);
+    if (with_layout && !has_cycle) layout_pts = make_layered_layout(graph, topo, 1.5f, 2.0f, 1.2f);
+    auto t1 = clock_t::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+    if (format == "json") {
+        std::stringstream ss;
+        ss << "{\"algorithm\":\"" << algo_name << "\",";
+        ss << "\"has_cycle\":" << (has_cycle ? "true" : "false") << ',';
+        ss << "\"time_ms\":" << ms << ',';
+        ss << "\"dense_bytes\":" << graph.dense_bytes() << ',';
+        ss << "\"varint_bytes\":" << graph.varint_bytes() << ',';
+        ss << "\"h\":" << to_json_array(to_int_vector(offsets)) << ',';
+        ss << "\"list\":" << to_json_array(to_int_vector(neighbors)) << ',';
+        if (has_cycle) ss << "\"topo\":null";
+        else ss << "\"topo\":" << to_json_array(to_int_vector(topo));
+        if (with_layout && !has_cycle) ss << ",\"layout\":" << layout_to_json(layout_pts);
+        ss << "}";
+        std::cout << ss.str() << "\n";
+    } else {
+        std::cerr << "Algorithm: " << algo_name << "  Time(ms): " << ms
+                  << "  Dense(bytes): " << graph.dense_bytes()
+                  << "  Varint(bytes): " << graph.varint_bytes() << "\n";
+        std::cout << "h:";
+        for (auto v : offsets) std::cout << ' ' << v;
+        std::cout << "\nlist:";
+        for (auto v : neighbors) std::cout << ' ' << v;
+        std::cout << '\n';
+        if (has_cycle) {
+            std::cout << "Graph has a cycle; topological order does not exist.\n";
+        } else {
+            std::cout << "Topological order:";
+            for (auto v : topo) std::cout << ' ' << v;
+            std::cout << '\n';
+            if (with_layout) {
+                std::cout << "Layout (id,x,y,z,layer):";
+                for (const auto &p : layout_pts) {
+                    std::cout << " [" << p.id << ':' << p.x << ',' << p.y << ',' << p.z << " l=" << p.layer << ']';
+                }
+                std::cout << '\n';
+            }
+        }
+    }
+}
+}
+
+struct Options {
+    std::string algo{"dfs"};
+    std::string format{"text"};
+    bool with_layout{false};
+    std::string demo;
+};
+
+Options parse_options(int argc, char **argv) {
+    Options opt;
+    int pos = 0;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--algo" && i + 1 < argc) opt.algo = argv[++i];
+        else if (a == "--format" && i + 1 < argc) opt.format = argv[++i];
+        else if (a == "--layout") opt.with_layout = true;
+        else if (a == "--demo" && i + 1 < argc) opt.demo = argv[++i];
+        else {
+            // positional fallback for backward compatibility
+            if (pos == 0) opt.algo = a;
+            else if (pos == 1) opt.format = a;
+            pos++;
+        }
+    }
+    return opt;
+}
+
+bool run_demo(const Options &opt) {
+    if (opt.demo.empty()) return false;
+    DemoResult r;
+    std::string name = opt.demo;
+    if (name == "course") r = CourseScheduler::Sample().run(opt.algo);
+    else if (name == "task") r = TaskDependencyManager::Sample().run(opt.algo);
+    else if (name == "package") r = PackageResolver::Sample().run(opt.algo);
+    else if (name == "social") r = SocialHierarchyAnalysis::Sample().run(opt.algo);
+    else {
+        std::cerr << "Unknown demo: " << name << "\n";
+        return true;
+    }
+
+    if (opt.format == "json") {
+        std::stringstream ss;
+        ss << "{\"demo\":\"" << name << "\",";
+        ss << "\"algorithm\":\"" << opt.algo << "\",";
+        ss << "\"has_cycle\":" << (r.has_cycle ? "true" : "false") << ',';
+        ss << "\"topo\":" << (r.has_cycle ? std::string("null") : to_json_array(to_int_vector(r.order)));
+        if (opt.with_layout && !r.has_cycle) ss << ",\"layout\":" << layout_to_json(r.layout);
+        ss << "}";
+        std::cout << ss.str() << "\n";
+    } else {
+        std::cout << "Demo: " << name << " using " << opt.algo << '\n';
+        if (r.has_cycle) {
+            std::cout << "Cycle detected, ordering unavailable.\n";
+        } else {
+            std::cout << "Topological order:";
+            for (auto v : r.order) std::cout << ' ' << v;
+            std::cout << '\n';
+            if (opt.with_layout) {
+                std::cout << "Layout (id,x,y,z,layer):";
+                for (const auto &p : r.layout) {
+                    std::cout << " [" << p.id << ':' << p.x << ',' << p.y << ',' << p.z << " l=" << p.layer << ']';
+                }
+                std::cout << '\n';
+            }
+        }
+    }
+    return true;
+}
+
+int main(int argc, char **argv) {
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
 
-    std::string algo = "dfs";
-    std::string format = "text";
-    if (argc >= 2) algo = argv[1];
-    if (argc >= 3) format = argv[2];
+    Options opt = parse_options(argc, argv);
+    if (run_demo(opt)) return 0;
 
     int n, m;
     if (!(std::cin >> n >> m)) {
-        std::cerr << "读取 n m 失败，请按格式输入顶点数和 list 长度 (或 n m 后跟边列表)。\n";
+        std::cerr << "Failed to read n m.\n";
         return 1;
     }
 
     std::vector<int> rest;
+    rest.reserve(static_cast<size_t>(n + m) * 2);
     int x;
     while (std::cin >> x) rest.push_back(x);
 
-    std::vector<int> h;
-    std::vector<int> list;
-    bool parsed_compressed = false;
-
-    if (static_cast<int>(rest.size()) >= n + 1) {
-        int possible_list_size = rest[n];
-        if (possible_list_size >= 0 && possible_list_size == static_cast<int>(rest.size()) - (n + 1)) {
-            h.assign(rest.begin(), rest.begin() + (n + 1));
-            list.assign(rest.begin() + (n + 1), rest.end());
-            parsed_compressed = true;
-        }
-    }
-    if (!parsed_compressed) {
-        if (static_cast<int>(rest.size()) == 2 * m) {
-            std::vector<std::vector<int>> adj(n);
-            for (int i = 0; i < m; ++i) {
-                int u = rest[2 * i];
-                int v = rest[2 * i + 1];
-                if (u < 0 || u >= n || v < 0 || v >= n) {
-                    std::cerr << "边端点超出范围: " << u << " -> " << v << "\n";
-                    return 1;
-                }
-                adj[u].push_back(v);
-            }
-            build_compressed(adj, h, list);
-        } else {
-            std::cerr << "输入格式无法识别。期望紧缩邻接表 (n m then h[0..n] and list[m]) 或边列表 (n m then m pairs)。\n";
-            return 1;
-        }
+    std::vector<std::vector<uint32_t>> adj;
+    if (!parse_graph_input(n, m, rest, adj)) {
+        std::cerr << "Unrecognized input format. Provide compressed CSR or edge list.\n";
+        return 1;
     }
 
-    auto run_and_output = [&](const std::string &which_algo) {
-        std::vector<int> topo;
-        bool has_cycle = false;
-        using clk = std::chrono::high_resolution_clock;
-        auto t0 = clk::now();
-        if (which_algo == "dfs") {
-            has_cycle = topsort_dfs(n, h, list, topo);
-        } else if (which_algo == "kahn") {
-            has_cycle = topsort_kahn(n, h, list, topo);
-        }
-        auto t1 = clk::now();
-        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    CompressedGraph graph;
+    graph.build_from_adj(adj);
+    graph.build_varint(); // materialize compressed view for memory report
 
-        if (format == "json") {
-            std::stringstream ss;
-            ss << "{\"algorithm\":\"" << which_algo << "\",\"has_cycle\":" << (has_cycle ? "true" : "false")
-               << ",\"time_ms\":" << ms << ",\"h\":" << to_json_array(h) << ",\"list\":" << to_json_array(list) << ",\"topo\":";
-            if (has_cycle) ss << "null";
-            else ss << to_json_array(topo);
-            ss << "}";
-            std::cout << ss.str() << "\n";
-        } else {
-            if (which_algo == "dfs" || which_algo == "kahn") std::cerr << "Algorithm: " << which_algo << "  Time(ms): " << ms << "\n";
-            std::cout << "h:";
-            for (int v : h) std::cout << ' ' << v;
-            std::cout << '\n';
-            std::cout << "list:";
-            for (int v : list) std::cout << ' ' << v;
-            std::cout << '\n';
-            if (has_cycle) std::cout << "Graph has a cycle; topological order does not exist.\n";
-            else {
-                std::cout << "Topological order:";
-                for (int v : topo) std::cout << ' ' << v;
-                std::cout << '\n';
-            }
-        }
-    };
+    if (opt.algo == "both") {
+        DFSTopoSolver dfs(graph);
+        KahnTopoSolver kahn(graph);
+        emit_result(dfs.name(), dfs, graph, opt.format, opt.with_layout);
+        emit_result(kahn.name(), kahn, graph, opt.format, opt.with_layout);
+        return 0;
+    }
 
-    if (algo == "both") {
-        run_and_output("dfs");
-        run_and_output("kahn");
+    if (opt.algo == "dfs") {
+        DFSTopoSolver solver(graph);
+        emit_result(solver.name(), solver, graph, opt.format, opt.with_layout);
+    } else if (opt.algo == "kahn") {
+        KahnTopoSolver solver(graph);
+        emit_result(solver.name(), solver, graph, opt.format, opt.with_layout);
+    } else if (opt.algo == "parallel") {
+        ParallelKahnSolver solver(graph, 1);
+        emit_result(solver.name(), solver, graph, opt.format, opt.with_layout);
+    } else if (opt.algo == "lexi_min") {
+        LexicographicKahnSolver solver(graph, true);
+        emit_result(solver.name(), solver, graph, opt.format, opt.with_layout);
+    } else if (opt.algo == "lexi_max") {
+        LexicographicKahnSolver solver(graph, false);
+        emit_result(solver.name(), solver, graph, opt.format, opt.with_layout);
+    } else if (opt.algo == "incremental") {
+        IncrementalTopoSolver solver(graph);
+        emit_result(solver.name(), solver, graph, opt.format, opt.with_layout);
     } else {
-        run_and_output(algo);
+        std::cerr << "Unknown algorithm: " << opt.algo << "\n";
+        return 1;
     }
-
     return 0;
 }
 

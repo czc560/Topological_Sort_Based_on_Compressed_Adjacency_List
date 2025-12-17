@@ -2,7 +2,7 @@
 
 ## 描述
 
-这是一个 C++ 程序，实现基于紧缩邻接表（compressed adjacency list）的图结构，并提供两种拓扑排序算法：DFS-based 和 Kahn's algorithm（BFS-based）。程序支持检测图中的环，并输出拓扑排序结果。
+这是一个 C++ 程序，实现基于紧缩邻接表（compressed adjacency list）的图结构，并提供多种拓扑排序算法：DFS、Kahn（BFS）、并行 Kahn（在本编译环境中回退为顺序）、增量维护版本，以及字典序最小/最大变体。程序支持检测图中的环，并输出拓扑排序结果，并能生成 3D 坐标用于可视化/VR。
 
 - **核心功能**：
   - 从普通邻接表构建紧缩邻接表（`h` 和 `list`）。
@@ -11,9 +11,12 @@
   - 文本和 JSON 输出格式。
 
 - **项目结构**：
-  - `topsort.cpp`：主程序，处理命令行参数和输入输出。
-  - `core/graph.hpp`：声明头文件。
-  - `core/graph.cpp`：实现文件。
+  - `topsort.cpp`：主程序，处理命令行参数、demo、可选 layout 输出。
+  - `core/compressed_graph.*`：CSR + Varint 压缩图结构，线程安全只读接口。
+  - `core/toposort.*`：`TopoSortSolver` 抽象类及 5 种派生算法（DFS、Kahn、并行 Kahn、增量、字典序）。
+  - `core/layout.*`：拓扑层级到 3D 坐标的转换。
+  - `core/demos.*`：4 个业务示例类（CourseScheduler / TaskDependencyManager / PackageResolver / SocialHierarchyAnalysis）。
+  - `web/index.html`：Three.js 3D/VR 预览界面（粘贴 JSON 输出即可）。
   - `CMakeLists.txt`：CMake 构建配置。
   - 示例输入：`sample_compressed.txt`（压缩格式）、`sample_edgelist.txt`（边列表格式）。
   - 示例输出：`result_json_example.txt`（JSON 格式）。
@@ -33,9 +36,11 @@ g++ -Wall -Wextra -g3 topsort.cpp core/graph.cpp -o output/topsort.exe
 ```bash
 mkdir build
 cd build
-cmake ..
+cmake .. -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="path/to/mingw32-make.exe"
 cmake --build .
 ```
+
+注意：CMake 配置可能需要指定 MinGW 路径。若有问题，直接使用 g++ 编译。
 
 ## 运行
 
@@ -43,10 +48,10 @@ cmake --build .
 
 ### 命令行参数
 
-- `<algorithm>`：排序算法（可选，默认 `dfs`）
-  - `dfs`：DFS-based 拓扑排序。
-  - `kahn`：Kahn's algorithm 拓扑排序。
-  - `both`：同时运行两种算法。
+- `--algo <name>`：排序算法（默认 `dfs`）同上。
+- `--format <text|json>`：输出格式。
+- `--layout`：额外输出 3D 坐标（layout 字段）。
+- `--demo <course|task|package|social>`：运行内置业务示例并输出拓扑与 layout。
 - `<format>`：输出格式（可选，默认 `text`）
   - `text`：人类可读文本。
   - `json`：机器可读 JSON。

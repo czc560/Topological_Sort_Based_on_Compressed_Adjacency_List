@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>TopoSort 3D Viewer</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; display: flex; height: 100vh; }
+    #controls { width: 320px; padding: 12px; background: #0f172a; color: #e2e8f0; box-sizing: border-box; }
+    #viewer { flex: 1; }
+    textarea { width: 100%; height: 160px; }
+    button { margin-top: 8px; padding: 8px 12px; }
+    .hint { font-size: 12px; color: #94a3b8; }
+    .row { margin-top: 8px; }
+    #status { font-size: 12px; color: #cbd5e1; margin-top: 6px; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+      "three/examples/jsm/controls/OrbitControls.js": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/controls/OrbitControls.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="controls">
+    <h3>TopoSort 3D/VR Preview</h3>
+    <p class="hint">Paste JSON output containing `layout` and `topo`.</p>
+    <textarea id="jsonInput" placeholder='{"layout":[{"id":0,"x":0,"y":0,"z":0,"layer":0}]}'></textarea>
+    <button id="loadBtn">Load Layout</button>
+    <p class="hint">Use mouse to rotate/zoom. Layers are mapped to depth (z axis).</p>
+    <div class="row">
+      <button id="playBtn">Play</button>
+      <button id="pauseBtn">Pause</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+    <div class="row">
+      <label style="font-size:12px;color:#94a3b8;">Step(ms): <input id="stepMs" type="number" value="800" style="width:60px;" /></label>
+    </div>
+    <div id="status">Status: idle</div>
+  </div>
+  <div id="viewer"></div>
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth - 320, window.innerHeight);
+    document.getElementById('viewer').appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xffffff);
+    const camera = new THREE.PerspectiveCamera(60, (window.innerWidth-320) / window.innerHeight, 0.1, 1000);
+    camera.position.set(8, 8, 12);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 0, 0);
+
+    const light = new THREE.DirectionalLight(0xffffff, 1.0);
+    light.position.set(5, 10, 7);
+    scene.add(light);
+    scene.add(new THREE.AmbientLight(0x404040));
+
+    let nodesGroup = new THREE.Group();
+    let edgesGroup = new THREE.Group();
+    scene.add(nodesGroup);
+    scene.add(edgesGroup);
+
+    const NODE_COLORS = [0x2563eb, 0xf59e0b, 0x10b981, 0xec4899, 0x8b5cf6, 0x22d3ee, 0xf97316, 0x14b8a6];
+    const EDGE_ACTIVE = 0x000000;
+    const EDGE_HIGHLIGHT = 0xff0000;
+    const EDGE_REMOVED = 0xcccccc;
+
+    let nodeMap = new Map(); // id -> mesh
+    let edgeObjs = []; // {u,v,line,active:true}
+    let adjIdx = [];  // per-u list of edge indices
+    let topoOrder = [];
+    let playTimer = null;
+    let currentStep = 0;
+    let indeg = [];
+    let queue = [];
+    let processedCount = 0;
+    let highlighted = []; // edge indices currently in highlight
+
+    function clearNodes() {
+      scene.remove(nodesGroup);
+      scene.remove(edgesGroup);
+      nodesGroup = new THREE.Group();
+      edgesGroup = new THREE.Group();
+      scene.add(nodesGroup);
+      scene.add(edgesGroup);
+      nodeMap.clear();
+      edgeObjs = [];
+      adjIdx = [];
+      topoOrder = [];
+      currentStep = 0;
+      indeg = [];
+      queue = [];
+      processedCount = 0;
+      highlighted = [];
+      if (playTimer) { clearInterval(playTimer); playTimer = null; }
+      document.getElementById('status').textContent = 'Status: idle';
+    }
+
+    function buildIndeg(h, list) {
+      const n = h.length - 1;
+      indeg = new Array(n).fill(0);
+      for (let u = 0; u < n; ++u) {
+        for (let idx = h[u]; idx < h[u + 1]; ++idx) indeg[list[idx]]++;
+      }
+      queue = [];
+      for (let i = 0; i < n; ++i) if (indeg[i] === 0) queue.push(i);
+      processedCount = 0;
+    }
+
+    function renderLayout(layout, h, list, topo) {
+      clearNodes();
+      const sphereGeo = new THREE.SphereGeometry(0.2, 16, 16);
+      const baseColor = 0x94a3b8;
+
+      const posMap = new Map();
+      layout.forEach(p => {
+        posMap.set(p.id, new THREE.Vector3(p.x, p.y, p.z));
+        const mat = new THREE.MeshStandardMaterial({ color: baseColor, transparent: true, opacity: 0.35, emissive: 0x000000 });
+        const m = new THREE.Mesh(sphereGeo, mat);
+        m.position.set(p.x, p.y, p.z);
+        nodesGroup.add(m);
+        nodeMap.set(p.id, m);
+      });
+
+      if (h && list && h.length > 1 && list.length > 0) {
+        adjIdx = Array.from({ length: h.length - 1 }, () => []);
+        for (let u = 0; u < h.length - 1; ++u) {
+          for (let idx = h[u]; idx < h[u + 1]; ++idx) {
+            const v = list[idx];
+            const pu = posMap.get(u);
+            const pv = posMap.get(v);
+            if (pu && pv) {
+              const geom = new THREE.BufferGeometry().setFromPoints([pu, pv]);
+              const mat = new THREE.LineBasicMaterial({ color: EDGE_ACTIVE, transparent: true, opacity: 0.6 });
+              const line = new THREE.Line(geom, mat);
+              edgesGroup.add(line);
+              adjIdx[u].push(edgeObjs.length);
+              edgeObjs.push({ u, v, line, active: true });
+            }
+          }
+        }
+      }
+
+      topoOrder = topo || [];
+      if (h && list && h.length > 1) buildIndeg(h, list);
+      highlightStep(0, true);
+
+      controls.update();
+    }
+
+    function highlightStep(step, reset = false) {
+      if (reset) {
+        nodeMap.forEach(mesh => { mesh.material.opacity = 0.35; mesh.material.emissive.set(0x000000); });
+        edgeObjs.forEach(e => { if (e.active) { e.line.material.opacity = 0.6; e.line.material.color.set(EDGE_ACTIVE); } else { e.line.material.opacity = 0.05; e.line.material.color.set(EDGE_REMOVED); } });
+        processedCount = 0;
+        highlighted = [];
+      }
+      // optional initial highlight of first in queue
+      if (queue.length) {
+        resetHighlightsToBlack();
+        highlightOutgoing(queue[0]);
+      }
+    }
+
+    function resetHighlightsToBlack() {
+      for (const ei of highlighted) {
+        const e = edgeObjs[ei];
+        if (e && e.active) {
+          e.line.material.color.set(EDGE_ACTIVE);
+          e.line.material.opacity = 0.6;
+        }
+      }
+      highlighted = [];
+    }
+
+    function highlightOutgoing(u) {
+      if (!adjIdx[u]) return;
+      for (const ei of adjIdx[u]) {
+        const e = edgeObjs[ei];
+        if (e && e.active) {
+          e.line.material.color.set(EDGE_HIGHLIGHT);
+          e.line.material.opacity = 0.9;
+          highlighted.push(ei);
+        }
+      }
+    }
+
+    function processStep() {
+      if (!queue.length) {
+        document.getElementById('status').textContent = 'Status: done or stuck (no zero-indegree)';
+        pausePlayback();
+        return;
+      }
+      // Highlight next node's outgoing edges in red (preview)
+      resetHighlightsToBlack();
+      highlightOutgoing(queue[0]);
+
+      const u = queue.shift();
+      const mesh = nodeMap.get(u);
+      if (mesh) {
+        const c = NODE_COLORS[processedCount % NODE_COLORS.length];
+        mesh.material.color.set(c);
+        mesh.material.opacity = 1.0;
+        mesh.material.emissive.set(0x000000);
+      }
+
+      if (adjIdx[u]) {
+        for (const ei of adjIdx[u]) {
+          const e = edgeObjs[ei];
+          if (e && e.active) {
+            // remove edge
+            e.active = false;
+            e.line.material.opacity = 0.05;
+            e.line.material.color.set(EDGE_REMOVED);
+            indeg[e.v] -= 1;
+            if (indeg[e.v] === 0) queue.push(e.v);
+          }
+        }
+      }
+      processedCount += 1;
+      document.getElementById('status').textContent = `Status: step ${processedCount} / ${indeg.length}`;
+
+      // preview next node's outgoing edges after updates
+      resetHighlightsToBlack();
+      if (queue.length) highlightOutgoing(queue[0]);
+
+      if (processedCount >= indeg.length) {
+        document.getElementById('status').textContent = 'Status: completed';
+        pausePlayback();
+      }
+    }
+
+    function startPlayback() {
+      if (!nodeMap.size) return;
+      if (!indeg.length) return;
+      const stepMs = Math.max(50, parseInt(document.getElementById('stepMs').value || '800', 10));
+      if (playTimer) clearInterval(playTimer);
+      playTimer = setInterval(processStep, stepMs);
+      document.getElementById('status').textContent = 'Status: playing';
+    }
+
+    function pausePlayback() {
+      if (playTimer) {
+        clearInterval(playTimer);
+        playTimer = null;
+        document.getElementById('status').textContent = 'Status: paused';
+      }
+    }
+
+    function resetPlayback() {
+      pausePlayback();
+      currentStep = 0;
+      highlightStep(0, true);
+      if (indeg.length && edgeObjs.length && adjIdx.length) {
+        buildIndeg(document.lastH || [], document.lastList || []);
+      }
+      document.getElementById('status').textContent = 'Status: idle';
+    }
+
+    document.getElementById('loadBtn').onclick = () => {
+      try {
+        const text = document.getElementById('jsonInput').value;
+        const obj = JSON.parse(text);
+        const layout = obj.layout || obj[0]?.layout || [];
+        const h = obj.h || obj[0]?.h || [];
+        const list = obj.list || obj[0]?.list || [];
+        const topo = obj.topo || obj[0]?.topo || [];
+        document.lastH = h;
+        document.lastList = list;
+        renderLayout(layout, h, list, topo);
+      } catch (e) {
+        alert('Invalid JSON: ' + e.message);
+      }
+    };
+
+    document.getElementById('playBtn').onclick = startPlayback;
+    document.getElementById('pauseBtn').onclick = pausePlayback;
+    document.getElementById('resetBtn').onclick = resetPlayback;
+
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
