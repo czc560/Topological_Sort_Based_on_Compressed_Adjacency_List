@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <cstdint>
 
 struct DemoResult {
     bool has_cycle{false};

@@ -60,6 +60,8 @@
       <textarea id="jsonInput" rows="6" placeholder='{"layout":[{"id":0,"x":0,"y":0,"z":0,"layer":0}]}'></textarea>
       <button id="loadBtn">Load Layout</button>
       <button id="startVizBtn">开始可视化</button>
+      <p class="hint">拓扑排序结果：</p>
+      <textarea id="topoResult" rows="3" readonly placeholder="topo will appear here"></textarea>
       <p class="hint">Use mouse to rotate/zoom. Layers are mapped to depth (z axis).</p>
       <div class="row">
         <button id="playBtn">Play</button>
@@ -299,6 +301,7 @@
       document.lastH = h;
       document.lastList = list;
       edgeJitterEnabled = true; // enable edge jitter for generated graphs
+      showTopo(topo);
     }
 
     function handleConfirmInput() {
@@ -614,6 +617,12 @@
       camera.updateProjectionMatrix();
     });
 
+    function showTopo(topo) {
+      const box = document.getElementById('topoResult');
+      if (!box) return;
+      box.value = topo && topo.length ? topo.join(' ') : '';
+    }
+
     function loadLayoutFromInput() {
       const text = document.getElementById('jsonInput').value;
       const obj = JSON.parse(text);
@@ -626,6 +635,7 @@
       document.lastH = h;
       document.lastList = list;
       renderLayout(layout, h, list, topo);
+      showTopo(topo);
     }
 
     document.getElementById('loadBtn').onclick = () => {
