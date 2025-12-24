@@ -401,7 +401,7 @@
       queue = [];
       processedCount = 0;
       highlighted = [];
-      if (playTimer) { clearInterval(playTimer); playTimer = null; }
+        if (playTimer) { clearInterval(playTimer); playTimer = null; }
       document.getElementById('status').textContent = 'Status: idle';
     }
 
@@ -547,6 +547,14 @@
       highlighted = [];
     }
 
+    function restoreEdgesToActive() {
+      edgeObjs.forEach(e => {
+        e.active = true;
+        if (e.line.line) { e.line.line.material.color.set(EDGE_ACTIVE); e.line.line.material.opacity = 0.6; }
+        if (e.line.cone) { e.line.cone.material.color.set(EDGE_ACTIVE); e.line.cone.material.opacity = 0.6; }
+      });
+    }
+
     function highlightOutgoing(u) {
       if (!adjIdx[u]) return;
       for (const ei of adjIdx[u]) {
@@ -624,10 +632,11 @@
     function resetPlayback() {
       pausePlayback();
       currentStep = 0;
-      highlightStep(0, true);
-      if (indeg.length && edgeObjs.length && adjIdx.length) {
-        buildIndeg(document.lastH || [], document.lastList || []);
+      restoreEdgesToActive();
+      if (document.lastH && document.lastH.length && document.lastList) {
+        buildIndeg(document.lastH, document.lastList);
       }
+      highlightStep(0, true);
       document.getElementById('status').textContent = 'Status: idle';
     }
 
