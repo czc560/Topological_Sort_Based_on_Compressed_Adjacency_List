@@ -47,8 +47,8 @@
         <button id="genLarge">大规模</button>
       </div>
       <div class="row">
-        <button id="genEdge">生成普通图</button>
-        <button id="genCSR">生成紧缩图</button>
+        <button id="genEdge">转换成普通图</button>
+        <button id="genCSR">转换成紧缩图</button>
       </div>
       <p class="hint">转换结果（只读）：</p>
       <textarea id="convertedOutput" rows="5" readonly placeholder="h: 0 0 1 ...&#10;list: ..."></textarea>
@@ -302,6 +302,28 @@
       document.lastList = list;
       edgeJitterEnabled = true; // enable edge jitter for generated graphs
       showTopo(topo);
+    }
+
+    function convertFormat(targetFormat) {
+      const inputType = document.getElementById('inputType');
+      const graphInput = document.getElementById('graphInput');
+      const convertedOutput = document.getElementById('convertedOutput');
+      const text = graphInput.value;
+      try {
+        const parsed = inputType.value === 'edge' ? parseEdgeList(text) : parseCSR(text);
+        if (parsed.hasCycle) {
+          alert('数据不合法：图中存在环（需要 DAG）。');
+          return;
+        }
+        const { n, m, adj, h, list } = parsed;
+        if (targetFormat === 'edge') {
+          convertedOutput.value = formatEdgeList(adj);
+        } else {
+          convertedOutput.value = formatCSR(n, m, h, list);
+        }
+      } catch (e) {
+        alert('输入错误：' + e.message);
+      }
     }
 
     function handleConfirmInput() {
@@ -656,8 +678,8 @@
     document.getElementById('genSmall').onclick = () => { currentSize = 'small'; generateAndFill(document.getElementById('inputType').value); };
     document.getElementById('genMedium').onclick = () => { currentSize = 'medium'; generateAndFill(document.getElementById('inputType').value); };
     document.getElementById('genLarge').onclick = () => { currentSize = 'large'; generateAndFill(document.getElementById('inputType').value); };
-    document.getElementById('genEdge').onclick = () => generateAndFill('edge');
-    document.getElementById('genCSR').onclick = () => generateAndFill('csr');
+    document.getElementById('genEdge').onclick = () => convertFormat('edge');
+    document.getElementById('genCSR').onclick = () => convertFormat('csr');
 
     document.getElementById('playBtn').onclick = startPlayback;
     document.getElementById('pauseBtn').onclick = pausePlayback;
