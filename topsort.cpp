@@ -8,6 +8,7 @@
 
 #include "core/compressed_graph.hpp"
 #include "core/demos.hpp"
+#include "core/graph_backend.hpp"
 #include "core/graph_clean.hpp"
 #include "core/layout.hpp"
 #include "core/toposort.hpp"
@@ -16,31 +17,6 @@ namespace {
 using clock_t = std::chrono::high_resolution_clock;
 
 std::vector<int> to_int_vector(const std::vector<uint32_t> &src) { return std::vector<int>(src.begin(), src.end()); }
-
-bool parse_graph_input(int n, int m, const std::vector<int> &rest, std::vector<std::vector<uint32_t>> &adj_out) {
-    adj_out.assign(n, {});
-    if (static_cast<int>(rest.size()) >= n + 1) {
-        int possible_list_size = rest[n];
-        if (possible_list_size >= 0 && possible_list_size == static_cast<int>(rest.size()) - (n + 1)) {
-            std::vector<int> h(rest.begin(), rest.begin() + n + 1);
-            std::vector<int> list(rest.begin() + n + 1, rest.end());
-            for (int u = 0; u < n; ++u) {
-                for (int idx = h[u]; idx < h[u + 1]; ++idx) adj_out[u].push_back(static_cast<uint32_t>(list[idx]));
-            }
-            return true;
-        }
-    }
-    if (static_cast<int>(rest.size()) == 2 * m) {
-        for (int i = 0; i < m; ++i) {
-            int u = rest[2 * i];
-            int v = rest[2 * i + 1];
-            if (u < 0 || u >= n || v < 0 || v >= n) return false;
-            adj_out[u].push_back(static_cast<uint32_t>(v));
-        }
-        return true;
-    }
-    return false;
-}
 
 void emit_result(const std::string &algo_name,
                  TopoSortSolver &solver,
@@ -68,8 +44,12 @@ void emit_result(const std::string &algo_name,
         ss << "\"varint_bytes\":" << graph.varint_bytes() << ',';
         ss << "\"h\":" << to_json_array(to_int_vector(offsets)) << ',';
         ss << "\"list\":" << to_json_array(to_int_vector(neighbors)) << ',';
-        if (has_cycle) ss << "\"topo\":null";
-        else ss << "\"topo\":" << to_json_array(to_int_vector(topo));
+        if (has_cycle) {
+            ss << "\"topo\":null,\"steps\":null";
+        } else {
+            auto topo_int = to_int_vector(topo);
+            ss << "\"topo\":" << to_json_array(topo_int) << ",\"steps\":" << to_json_array(topo_int);
+        }
         if (with_layout && !has_cycle) ss << ",\"layout\":" << layout_to_json(layout_pts);
         ss << "}";
         std::cout << ss.str() << "\n";
@@ -175,25 +155,23 @@ int main(int argc, char **argv) {
     Options opt = parse_options(argc, argv);
     if (run_demo(opt)) return 0;
 
-    int n, m;
-    if (!(std::cin >> n >> m)) {
-        std::cerr << "Failed to read n m.\n";
+    std::ostringstream ss;
+    ss << std::cin.rdbuf();
+    std::string raw = ss.str();
+    if (raw.empty()) {
+        std::cerr << "No input provided. Expecting edge list or CSR text.\n";
         return 1;
     }
 
-    std::vector<int> rest;
-    rest.reserve(static_cast<size_t>(n + m) * 2);
-    int x;
-    while (std::cin >> x) rest.push_back(x);
-
-    std::vector<std::vector<uint32_t>> adj;
-    if (!parse_graph_input(n, m, rest, adj)) {
-        std::cerr << "Unrecognized input format. Provide compressed CSR or edge list.\n";
+    GraphDataStore store;
+    std::string err;
+    if (!store.load_from_text(raw, err)) {
+        std::cerr << "Input invalid: " << err << "\n";
         return 1;
     }
 
     CompressedGraph graph;
-    graph.build_from_adj(adj);
+    graph.build_from_adj(store.adjacency());
     graph.build_varint(); // materialize compressed view for memory report
 
     if (opt.algo == "both") {
